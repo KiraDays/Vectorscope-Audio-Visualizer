@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Audio Visualizer – Vectorscope & Lissajous</title>
+  <style>
+    body {
+      margin: 0;
+      background: #000;
+      color: #fff;
+      text-align: center;
+      font-family: Arial, sans-serif;
+    }
+    h1 {
+      margin-top: 20px;
+    }
+    canvas {
+      display: block;
+      margin: 20px auto;
+      background: #000;
+      border: 1px solid #444;
+    }
+    #controls {
+      margin: 20px;
+    }
+    label {
+      margin-right: 10px;
+    }
+    input[type="range"] {
+      vertical-align: middle;
+    }
+  </style>
+</head>
+<body>
+  <h1>Audio Visualizer – Vectorscope & Lissajous</h1>
+  <canvas id="vectorscope" width="600" height="600"></canvas>
+  <div id="controls">
+    <p>
+      <label for="fileInput">Choose an audio file (MP3, WAV, OGG):</label>
+      <input type="file" id="fileInput" accept="audio/*" />
+    </p>
+    <p>
+      <audio id="audio" controls></audio>
+    </p>
+    <p>
+      <label for="lineThicknessSlider">Line Thickness:</label>
+      <input type="range" id="lineThicknessSlider" min="1" max="10" value="1" />
+      <span id="lineThicknessValue">1</span>
+    </p>
+    <p>
+      <label for="stipplingSlider">Stippling:</label>
+      <input type="range" id="stipplingSlider" min="1" max="10" value="1" />
+      <span id="stipplingValue">1</span>
+    </p>
+    <p>
+      <label for="modeSelect">Visualizer Mode:</label>
+      <select id="modeSelect">
+        <option value="vectorscope">Vectorscope</option>
+        <option value="lissajous">Lissajous</option>
+      </select>
+    </p>
+  </div>
+
+  <script>
+    // Get references to the DOM elements
+    const canvas = document.getElementById('vectorscope');
+    const ctx = canvas.getContext('2d');
+    const fileInput = document.getElementById('fileInput');
+    const audioElement = document.getElementById('audio');
+    const lineThicknessSlider = document.getElementById('lineThicknessSlider');
+    const stipplingSlider = document.getElementById('stipplingSlider');
+    const lineThicknessValue = document.getElementById('lineThicknessValue');
+    const stipplingValue = document.getElementById('stipplingValue');
+    const modeSelect = document.getElementById('modeSelect');
+
+    // Update slider display values on change
+    lineThicknessSlider.addEventListener('input', () => {
+      lineThicknessValue.textContent = lineThicknessSlider.value;
+    });
+    stipplingSlider.addEventListener('input', () => {
+      stipplingValue.textContent = stipplingSlider.value;
+    });
+
+    // Declare audio-related variables
+    let audioCtx, source, splitter, analyserL, analyserR, merger;
+    let dataArrayL, dataArrayR, bufferLength;
+
+    fileInput.addEventListener('change', function() {
+      const file = this.files[0];
+      if (!file) return;
+
+      // Create a URL for the selected file and load it into the audio element
+      const fileURL = URL.createObjectURL(file);
+      audioElement.src = fileURL;
+      audioElement.play();
+
+      // Initialize the AudioContext on first user interaction
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        // Create a MediaElementSource from the audio element
+        source = audioCtx.createMediaElementSource(audioElement);
+
+        // Split the stereo signal into two channels
+        splitter = audioCtx.createChannelSplitter(2);
+        source.connect(splitter);
+
+        // Create an analyser for each channel
+        analyserL = audioCtx.createAnalyser();
+        analyserR = audioCtx.createAnalyser();
+        analyserL.fftSize = 2048;
+        analyserR.fftSize = 2048;
+        bufferLength = analyserL.fftSize / 2; // equals 1024 samples
+        dataArrayL = new Float32Array(bufferLength);
+        dataArrayR = new Float32Array(bufferLength);
+
+        // Connect each splitter output to its respective analyser
+        splitter.connect(analyserL, 0);
+        splitter.connect(analyserR, 1);
+
+        // Merge the two channels back together for playback
+        merger = audioCtx.createChannelMerger(2);
+        analyserL.connect(merger, 0, 0);
+        analyserR.connect(merger, 0, 1);
+        merger.connect(audioCtx.destination);
+
+        // Start the visualization loop
+        draw();
+      }
+    });
+
+    function draw() {
+      requestAnimationFrame(draw);
+
+      // Retrieve the time-domain data for each channel
+      analyserL.getFloatTimeDomainData(dataArrayL);
+      analyserR.getFloatTimeDomainData(dataArrayR);
+
+      // Get current slider values
+      const thickness = parseInt(lineThicknessSlider.value, 10);
+      const stipple = parseInt(stipplingSlider.value, 10);
+      const mode = modeSelect.value;
+
+      // Clear the canvas with a black background
+      ctx.fillStyle = 'black';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Draw a reference crosshair in dark green
+      ctx.strokeStyle = 'darkgreen';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(canvas.width / 2, 0);
+      ctx.lineTo(canvas.width / 2, canvas.height);
+      ctx.moveTo(0, canvas.height / 2);
+      ctx.lineTo(canvas.width, canvas.height / 2);
+      ctx.stroke();
+
+      // Depending on mode, draw either a vectorscope (individual points) or a Lissajous curve
+      if (mode === 'vectorscope') {
+        // Draw points for each sample, skipping based on stippling value
+        ctx.fillStyle = 'lime';
+        for (let i = 0; i < bufferLength; i += stipple) {
+          let x = (dataArrayL[i] * 0.5 + 0.5) * canvas.width;
+          let y = (1 - (dataArrayR[i] * 0.5 + 0.5)) * canvas.height;
+          ctx.fillRect(x, y, thickness, thickness);
+        }
+      } else if (mode === 'lissajous') {
+        // Draw a continuous line connecting the sample points
+        ctx.strokeStyle = 'lime';
+        ctx.lineWidth = thickness;
+        ctx.beginPath();
+        // Start at the first point
+        let x0 = (dataArrayL[0] * 0.5 + 0.5) * canvas.width;
+        let y0 = (1 - (dataArrayR[0] * 0.5 + 0.5)) * canvas.height;
+        ctx.moveTo(x0, y0);
+        // Draw lines connecting subsequent points (using stippling to reduce the number of points)
+        for (let i = stipple; i < bufferLength; i += stipple) {
+          let x = (dataArrayL[i] * 0.5 + 0.5) * canvas.width;
+          let y = (1 - (dataArrayR[i] * 0.5 + 0.5)) * canvas.height;
+          ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+    }
+  </script>
+</body>
+</html>
